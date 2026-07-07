@@ -1,5 +1,5 @@
-const SUPABASE_URL = 'https://dpyhjjcoabcglfmgecug.supabase.co'
-const PUBLISHABLE_KEY = 'sb_publishable_zcNkgqGJjBtj8GoRlMvl9A_zkdmXhf5'
+const SUPABASE_URL = 'https://api.nuvio.tv'
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI'
 
 export interface NuvioAddon {
   id?: string; user_id?: string; profile_id: number
@@ -25,7 +25,7 @@ async function apiFetch(path: string, options: RequestInit = {}) {
   const res = await fetch(url, {
     ...options,
     headers: {
-      'apikey': PUBLISHABLE_KEY,
+      'apikey': SUPABASE_KEY,
       'Content-Type': 'application/json',
       ...(options.headers || {}),
     },
@@ -51,8 +51,10 @@ export async function getProfiles(token: string): Promise<NuvioProfile[]> {
 }
 
 export async function getAddons(token: string, profileId: number): Promise<NuvioAddon[]> {
-  return apiFetch(`/rest/v1/addons?select=*&profile_id=eq.${profileId}&order=sort_order`,
+  const result = await apiFetch(`/rest/v1/addons?select=*&profile_id=eq.${profileId}&order=sort_order`,
     { headers: { Authorization: `Bearer ${token}` } })
+  console.log('[getAddons] response:', JSON.stringify(result?.map((a: NuvioAddon) => ({ url: a.url, enabled: a.enabled })), null, 2))
+  return result
 }
 
 export async function getPlugins(token: string, profileId: number): Promise<NuvioPlugin[]> {
@@ -99,6 +101,7 @@ export async function getLibrary(token: string, profileId: number): Promise<unkn
 
 export async function pushAddons(token: string, profileId: number,
   addons: Pick<NuvioAddon, 'url' | 'name' | 'enabled' | 'sort_order'>[]): Promise<void> {
+  console.log('[pushAddons] payload:', JSON.stringify({ p_profile_id: profileId, p_addons: addons }, null, 2))
   await apiFetch('/rest/v1/rpc/sync_push_addons', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({ p_profile_id: profileId, p_addons: addons }),
