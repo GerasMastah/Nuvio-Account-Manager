@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { signIn, getProfiles, getCollections, pushAddons, pushPlugins, pushCollections } from '@/lib/nuvio'
+import {
+  signIn, getProfiles, getCollections, pushAddons, pushPlugins, pushCollections,
+  pushHomeCatalogSettings,
+} from '@/lib/nuvio'
 import type { NuvioAddon, NuvioPlugin } from '@/lib/nuvio'
+import type { HomeCatalogSettings } from '@/lib/homeRows'
 
 interface TargetAccount {
   email: string
@@ -9,6 +13,7 @@ interface TargetAccount {
   cloneAddons: boolean
   clonePlugins: boolean
   cloneCollections: boolean
+  cloneHomeRows: boolean
 }
 
 interface CloneResult {
@@ -19,6 +24,7 @@ interface CloneResult {
   addonCount?: number
   pluginCount?: number
   collectionCount?: number
+  homeRowCount?: number
 }
 
 async function mergeAndPushCollections(
@@ -46,11 +52,12 @@ async function mergeAndPushCollections(
 
 export async function POST(req: NextRequest) {
   try {
-    const { targets, addons, plugins, collections }: {
+    const { targets, addons, plugins, collections, homeCatalogSettings }: {
       targets: TargetAccount[]
       addons: NuvioAddon[]
       plugins: NuvioPlugin[]
       collections: unknown[] | null
+      homeCatalogSettings: HomeCatalogSettings | null
     } = await req.json()
 
     if (!targets?.length) {
@@ -82,12 +89,16 @@ export async function POST(req: NextRequest) {
             ops.push(mergeAndPushCollections(auth.access_token, pid, collections))
 
           await Promise.all(ops)
+          if (target.cloneHomeRows && homeCatalogSettings) {
+            await pushHomeCatalogSettings(auth.access_token, pid, homeCatalogSettings)
+          }
 
           return {
             email: target.email, profileId: pid, success: true,
             addonCount: target.cloneAddons ? strippedAddons.length : 0,
             pluginCount: target.clonePlugins ? strippedPlugins.length : 0,
             collectionCount: target.cloneCollections ? (collections?.length ?? 0) : 0,
+            homeRowCount: target.cloneHomeRows ? (homeCatalogSettings?.items.length ?? 0) : 0,
           }
         } catch (err: unknown) {
           return {

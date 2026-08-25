@@ -13,15 +13,16 @@ A free, open source browser-based tool for managing your Nuvio accounts. Clone p
 ## Features
 
 ### Account Cloning
-Clone your addons, plugins, and collections from one Nuvio account to any number of others in one click.
+Clone your addons, plugins, collections, and Home layout rows from one Nuvio account to any number of others in one click.
 
 1. Sign in with your source account
 2. Select the source profile and preview what will be copied
-3. Add target accounts and pick a destination profile for each
-4. Use per-target toggles to control what gets copied (addons, plugins, collections)
-5. Hit Push and watch live success or error status per account
+3. Open **Home Rows** to choose exactly which catalog rows are visible on Home
+4. Add target accounts and pick a destination profile for each
+5. Use per-target toggles to control what gets copied (addons, plugins, collections, Home rows)
+6. Hit Push and watch live success or error status per account
 
-Collections are merged with existing ones on the target rather than overwriting them.
+Collections are merged with existing ones on the target rather than overwriting them. Home row visibility is copied independently from addon enabled state, so an addon can remain installed for streams while its catalog rows stay hidden.
 
 ### Account Management
 A full browser-based dashboard for managing multiple Nuvio accounts without opening the app.
@@ -90,7 +91,7 @@ This tool has no ads, no tracking, and no account creation required. It is fully
 
 **Collections Builder always merges.** Pushing a collection replaces only that collection by ID and leaves all others on the account untouched.
 
-**Settings don't sync.** Nuvio stores profile settings locally on each device using MMKV, not in the cloud, so there is nothing to copy.
+**Only cloud-backed Home rows sync.** Account Cloning can copy the Home catalog visibility/order stored by Nuvio's cloud sync. Other device-only preferences remain in local MMKV storage and cannot be copied.
 
 **Tokens expire after about 60 minutes.** The account management dashboard silently re-authenticates in the background when a token expires using the locally stored credentials.
 
@@ -166,12 +167,14 @@ lib/
 | `GET /rest/v1/addons?profile_id=eq.{n}` | Read addons |
 | `GET /rest/v1/plugins?profile_id=eq.{n}` | Read plugins |
 | `POST /rest/v1/rpc/sync_pull_collections` | Read collections |
+| `POST /rest/v1/rpc/sync_pull_home_catalog_settings` | Read Home catalog row settings |
 | `POST /rest/v1/rpc/sync_pull_watch_progress` | Read watch progress |
 | `POST /rest/v1/rpc/sync_pull_watched_items` | Read watch history |
 | `POST /rest/v1/rpc/sync_pull_library` | Read library |
 | `POST /rest/v1/rpc/sync_push_addons` | Write addons (full replace) |
 | `POST /rest/v1/rpc/sync_push_plugins` | Write plugins (full replace) |
 | `POST /rest/v1/rpc/sync_push_collections` | Write collections (full replace) |
+| `POST /rest/v1/rpc/sync_push_home_catalog_settings` | Write Home catalog row settings |
 | `POST /rest/v1/rpc/sync_push_watch_progress` | Write watch progress (merge) |
 | `POST /rest/v1/rpc/sync_push_watched_items` | Write watch history (merge) |
 | `POST /rest/v1/rpc/sync_push_library` | Write library (full replace) |

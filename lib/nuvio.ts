@@ -1,3 +1,16 @@
+import {
+  normalizeHomeCatalogSettings,
+  parseHomeCatalogSettingsResponse,
+  toManifestUrl,
+  type HomeCatalogSettings,
+  type HomeManifestSummary,
+} from './homeRows'
+import {
+  fetchManifestJson,
+  MANIFEST_FETCH_CONCURRENCY,
+  mapWithConcurrency,
+} from './safeManifest'
+
 const SUPABASE_URL = 'https://api.nuvio.tv'
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI'
 
@@ -53,7 +66,6 @@ export async function getProfiles(token: string): Promise<NuvioProfile[]> {
 export async function getAddons(token: string, profileId: number): Promise<NuvioAddon[]> {
   const result = await apiFetch(`/rest/v1/addons?select=*&profile_id=eq.${profileId}&order=sort_order`,
     { headers: { Authorization: `Bearer ${token}` } })
-  console.log('[getAddons] response:', JSON.stringify(result?.map((a: NuvioAddon) => ({ url: a.url, enabled: a.enabled })), null, 2))
   return result
 }
 
@@ -73,6 +85,74 @@ export async function getCollections(token: string, profileId: number): Promise<
     try { return JSON.parse(raw) } catch { return null }
   }
   return Array.isArray(raw) ? raw : null
+}
+
+export async function getHomeCatalogSettings(
+  token: string,
+  profileId: number,
+): Promise<HomeCatalogSettings | null> {
+  const raw = await apiFetch('/rest/v1/rpc/sync_pull_home_catalog_settings', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      p_profile_id: profileId,
+      p_platform: 'home_catalog_shared',
+    }),
+  })
+  return parseHomeCatalogSettingsResponse(raw)
+}
+
+export async function pushHomeCatalogSettings(
+  token: string,
+  profileId: number,
+  settings: HomeCatalogSettings,
+): Promise<void> {
+  const normalized = normalizeHomeCatalogSettings(settings)
+  if (!normalized) throw new Error('Invalid home catalog settings payload')
+  await apiFetch('/rest/v1/rpc/sync_push_home_catalog_settings', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      p_profile_id: profileId,
+      p_platform: 'home_catalog_shared',
+      p_settings_json: normalized,
+    }),
+  })
+}
+
+export async function getAddonManifestSummaries(
+  addons: NuvioAddon[],
+): Promise<HomeManifestSummary[]> {
+  const summaries = await mapWithConcurrency(
+    addons,
+    MANIFEST_FETCH_CONCURRENCY,
+    async addon => {
+      try {
+        const { data } = await fetchManifestJson(toManifestUrl(addon.url))
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid manifest')
+        const raw = data as Record<string, unknown>
+        if (typeof raw.id !== 'string') throw new Error('Manifest id missing')
+        const catalogs = Array.isArray(raw.catalogs) ? raw.catalogs.flatMap(entry => {
+          if (!entry || typeof entry !== 'object') return []
+          const catalog = entry as Record<string, unknown>
+          if (typeof catalog.type !== 'string' || typeof catalog.id !== 'string') return []
+          return [{
+            type: catalog.type,
+            id: catalog.id,
+            name: typeof catalog.name === 'string' ? catalog.name : undefined,
+          }]
+        }) : []
+        return {
+          id: raw.id,
+          name: addon.name || (typeof raw.name === 'string' ? raw.name : raw.id),
+          catalogs,
+        } satisfies HomeManifestSummary
+      } catch {
+        return null
+      }
+    },
+  )
+  return summaries.flatMap(summary => summary ? [summary] : [])
 }
 
 export async function getWatchProgress(token: string, profileId: number): Promise<unknown[]> {
@@ -101,7 +181,6 @@ export async function getLibrary(token: string, profileId: number): Promise<unkn
 
 export async function pushAddons(token: string, profileId: number,
   addons: Pick<NuvioAddon, 'url' | 'name' | 'enabled' | 'sort_order'>[]): Promise<void> {
-  console.log('[pushAddons] payload:', JSON.stringify({ p_profile_id: profileId, p_addons: addons }, null, 2))
   await apiFetch('/rest/v1/rpc/sync_push_addons', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({ p_profile_id: profileId, p_addons: addons }),
