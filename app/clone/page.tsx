@@ -3,6 +3,9 @@
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useIsMobile } from '@/lib/useIsMobile'
+import { firstAvailableCloneTab, type CloneTabId } from '@/lib/cloneTabs'
+import { setOnlyEnabledHomeRows } from '@/lib/homeRows'
+import type { HomeCatalogSettings, HomeRowDescription } from '@/lib/homeRows'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,21 +20,23 @@ interface Plugin {
 interface Profile {
   id: string; profile_index: number; name: string; avatar_color_hex: string
 }
-interface SourceAccount {
-  email: string; token: string; user: { id: string; email: string }
+interface SourceData {
+  user: { id: string; email: string }
   profiles: Profile[]; addons: Addon[]; plugins: Plugin[]
   collections: unknown[] | null
+  homeCatalogSettings: HomeCatalogSettings | null
+  homeRows: HomeRowDescription[]
   selectedProfileId: number
 }
 interface TargetAccount {
   id: string; email: string; password: string; profileId: number
-  cloneAddons: boolean; clonePlugins: boolean; cloneCollections: boolean
+  cloneAddons: boolean; clonePlugins: boolean; cloneCollections: boolean; cloneHomeRows: boolean
   status: 'idle' | 'loading' | 'success' | 'error'
   error?: string
-  addonCount?: number; pluginCount?: number; collectionCount?: number
+  addonCount?: number; pluginCount?: number; collectionCount?: number; homeRowCount?: number
 }
 
-type TabId = 'addons' | 'plugins' | 'collections'
+type TabId = CloneTabId
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -194,12 +199,65 @@ function CollectionsPreview({ collections }: { collections: unknown[] | null }) 
   )
 }
 
+function HomeRowsPreview({ rows, onToggle, onSetAll }: {
+  rows: HomeRowDescription[]
+  onToggle: (key: string, enabled: boolean) => void
+  onSetAll: (enabled: boolean) => void
+}) {
+  const visibleCount = rows.filter(row => row.enabled).length
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+        No Home rows found on this profile
+      </div>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {visibleCount} of {rows.length} visible
+        </span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[{ label: 'Enable all', value: true }, { label: 'Disable all', value: false }].map(action => (
+            <button key={action.label} onClick={() => onSetAll(action.value)} style={{
+              background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6,
+              color: 'var(--text-muted)', padding: '5px 9px', fontSize: 11,
+              fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            }}>{action.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+        {rows.map(row => (
+          <div key={row.key} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            background: 'var(--bg)', border: '1px solid var(--border)',
+            borderRadius: 8, padding: '9px 12px', opacity: row.enabled ? 1 : 0.55,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {row.title}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {row.provider} · {row.type}
+              </div>
+            </div>
+            <Toggle checked={row.enabled} onChange={enabled => onToggle(row.key, enabled)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Toggle definitions ───────────────────────────────────────────────────────
 
-const TOGGLE_ITEMS: { field: keyof TargetAccount; label: string; sourceKey: 'hasAddons' | 'hasPlugins' | 'hasCollections' }[] = [
+const TOGGLE_ITEMS: { field: keyof TargetAccount; label: string; sourceKey: 'hasAddons' | 'hasPlugins' | 'hasCollections' | 'hasHomeRows' }[] = [
   { field: 'cloneAddons',      label: 'Addons',      sourceKey: 'hasAddons' },
   { field: 'clonePlugins',     label: 'Plugins',     sourceKey: 'hasPlugins' },
   { field: 'cloneCollections', label: 'Collections', sourceKey: 'hasCollections' },
+  { field: 'cloneHomeRows',    label: 'Home rows',   sourceKey: 'hasHomeRows' },
 ]
 
 function TargetRow({ target, index, onUpdate, onRemove, sourceProfiles, availability, isMobile }: {
@@ -220,6 +278,7 @@ function TargetRow({ target, index, onUpdate, onRemove, sourceProfiles, availabi
   if (target.addonCount) successParts.push(`${target.addonCount} addon${target.addonCount !== 1 ? 's' : ''}`)
   if (target.pluginCount) successParts.push(`${target.pluginCount} plugin${target.pluginCount !== 1 ? 's' : ''}`)
   if (target.collectionCount) successParts.push(`${target.collectionCount} collection${target.collectionCount !== 1 ? 's' : ''}`)
+  if (target.homeRowCount) successParts.push(`${target.homeRowCount} Home row${target.homeRowCount !== 1 ? 's' : ''}`)
 
   const visibleToggles = TOGGLE_ITEMS.filter(t => availability[t.sourceKey])
 
@@ -300,11 +359,11 @@ function TabBar({ tabs, active, onChange }: {
 }) {
   if (tabs.length <= 1) return null
   return (
-    <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 4, marginBottom: 10 }}>
+    <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 4, marginBottom: 10, overflowX: 'auto' }}>
       {tabs.map(t => (
         <button key={t.id} onClick={() => onChange(t.id)}
           style={{
-            flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer',
+            flex: 1, minWidth: 110, padding: '7px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
             background: active === t.id ? '#1a1a24' : 'transparent',
             color: active === t.id ? 'var(--text)' : 'var(--text-muted)',
             fontSize: 13, fontWeight: 600, fontFamily: 'inherit', transition: 'all 0.15s',
@@ -325,12 +384,12 @@ export default function Home() {
   const [sourcePassword, setSourcePassword] = useState('')
   const [sourceLoading, setSourceLoading] = useState(false)
   const [sourceError, setSourceError] = useState('')
-  const [source, setSource] = useState<SourceAccount | null>(null)
+  const [source, setSource] = useState<SourceData | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('addons')
 
   const [targets, setTargets] = useState<TargetAccount[]>([{
     id: crypto.randomUUID(), email: '', password: '', profileId: 1,
-    cloneAddons: true, clonePlugins: true, cloneCollections: true,
+    cloneAddons: true, clonePlugins: true, cloneCollections: true, cloneHomeRows: true,
     status: 'idle',
   }])
 
@@ -352,9 +411,7 @@ export default function Home() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Login failed')
       setSource(data)
-      if (data.addons?.length > 0) setActiveTab('addons')
-      else if (data.plugins?.length > 0) setActiveTab('plugins')
-      else if (data.collections?.length > 0) setActiveTab('collections')
+      setActiveTab(firstAvailableCloneTab(data))
     } catch (e: unknown) {
       setSourceError(e instanceof Error ? e.message : 'Login failed')
     } finally {
@@ -365,6 +422,7 @@ export default function Home() {
   async function handleProfileChange(profileId: number) {
     if (!source) return
     setSourceLoading(true)
+    setSourceError('')
     try {
       const res = await fetch('/api/source', {
         method: 'POST',
@@ -372,16 +430,46 @@ export default function Home() {
         body: JSON.stringify({ email: sourceEmail, password: sourcePassword, profileId }),
       })
       const data = await res.json()
-      if (res.ok) setSource(data)
+      if (!res.ok) throw new Error(data.error || 'Failed to load profile')
+      setSource(data)
+      setActiveTab(firstAvailableCloneTab(data))
+    } catch (error: unknown) {
+      setSourceError(error instanceof Error ? error.message : 'Failed to load profile')
     } finally {
       setSourceLoading(false)
     }
   }
 
+  function updateHomeRow(key: string, enabled: boolean) {
+    setSource(previous => {
+      if (!previous?.homeCatalogSettings) return previous
+      const enabledKeys = new Set(previous.homeRows.filter(row => row.enabled).map(row => row.key))
+      if (enabled) enabledKeys.add(key)
+      else enabledKeys.delete(key)
+      return {
+        ...previous,
+        homeCatalogSettings: setOnlyEnabledHomeRows(previous.homeCatalogSettings, enabledKeys),
+        homeRows: previous.homeRows.map(row => row.key === key ? { ...row, enabled } : row),
+      }
+    })
+  }
+
+  function setAllHomeRows(enabled: boolean) {
+    setSource(previous => {
+      if (!previous?.homeCatalogSettings) return previous
+      const enabledKeys = enabled ? new Set(previous.homeRows.map(row => row.key)) : new Set<string>()
+      return {
+        ...previous,
+        homeCatalogSettings: setOnlyEnabledHomeRows(previous.homeCatalogSettings, enabledKeys),
+        homeRows: previous.homeRows.map(row => ({ ...row, enabled })),
+      }
+    })
+  }
+
   const addTarget = useCallback(() => {
     setTargets(prev => [...prev, {
       id: crypto.randomUUID(), email: '', password: '', profileId: 1,
-      cloneAddons: true, clonePlugins: true, cloneCollections: true,
+      cloneAddons: true, clonePlugins: true, cloneCollections: true, cloneHomeRows: true,
       status: 'idle',
     }])
   }, [])
@@ -407,10 +495,11 @@ export default function Home() {
           addons: source.addons,
           plugins: source.plugins,
           collections: source.collections,
+          homeCatalogSettings: source.homeCatalogSettings,
           targets: targets.map(t => ({
             email: t.email, password: t.password, profileId: t.profileId,
             cloneAddons: t.cloneAddons, clonePlugins: t.clonePlugins,
-            cloneCollections: t.cloneCollections,
+            cloneCollections: t.cloneCollections, cloneHomeRows: t.cloneHomeRows,
           })),
         }),
       })
@@ -419,7 +508,7 @@ export default function Home() {
 
       const results = data.results as Array<{
         email: string; success: boolean; error?: string
-        addonCount?: number; pluginCount?: number; collectionCount?: number
+        addonCount?: number; pluginCount?: number; collectionCount?: number; homeRowCount?: number
       }>
 
       setTargets(prev => prev.map((t, i) => {
@@ -427,7 +516,7 @@ export default function Home() {
         return r ? {
           ...t, status: r.success ? 'success' : 'error', error: r.error,
           addonCount: r.addonCount, pluginCount: r.pluginCount,
-          collectionCount: r.collectionCount,
+          collectionCount: r.collectionCount, homeRowCount: r.homeRowCount,
         } : t
       }))
       setCloneDone(results.every(r => r.success))
@@ -444,7 +533,7 @@ export default function Home() {
     setSourceError(''); setCloneDone(false); setCloneError('')
     setTargets([{
       id: crypto.randomUUID(), email: '', password: '', profileId: 1,
-      cloneAddons: true, clonePlugins: true, cloneCollections: true,
+      cloneAddons: true, clonePlugins: true, cloneCollections: true, cloneHomeRows: true,
       status: 'idle',
     }])
   }
@@ -452,8 +541,9 @@ export default function Home() {
   const hasAddons      = (source?.addons?.length ?? 0) > 0
   const hasPlugins     = (source?.plugins?.length ?? 0) > 0
   const hasCollections = (source?.collections?.length ?? 0) > 0
-  const availability   = { hasAddons, hasPlugins, hasCollections }
-  const hasAnything    = hasAddons || hasPlugins || hasCollections
+  const hasHomeRows    = source?.homeCatalogSettings != null
+  const availability   = { hasAddons, hasPlugins, hasCollections, hasHomeRows }
+  const hasAnything    = hasAddons || hasPlugins || hasCollections || hasHomeRows
 
   const canClone = !cloning && targets.length > 0 &&
     targets.every(t => t.email && t.password) &&
@@ -461,19 +551,22 @@ export default function Home() {
     targets.some(t =>
       (t.cloneAddons && hasAddons) ||
       (t.clonePlugins && hasPlugins) ||
-      (t.cloneCollections && hasCollections)
+      (t.cloneCollections && hasCollections) ||
+      (t.cloneHomeRows && hasHomeRows)
     )
 
   const sourceTabs: { id: TabId; label: string }[] = [
     hasAddons      && { id: 'addons'      as const, label: `Addons (${source?.addons.length ?? 0})` },
     hasPlugins     && { id: 'plugins'     as const, label: `Plugins (${source?.plugins.length ?? 0})` },
     hasCollections && { id: 'collections' as const, label: `Collections (${source?.collections?.length ?? 0})` },
+    hasHomeRows    && { id: 'homeRows'    as const, label: `Home Rows (${source?.homeRows.length ?? 0})` },
   ].filter(Boolean) as { id: TabId; label: string }[]
 
   const sourceSummaryParts: string[] = []
   if (hasAddons)      sourceSummaryParts.push(`${source?.addons.length} addon${source?.addons.length !== 1 ? 's' : ''}`)
   if (hasPlugins)     sourceSummaryParts.push(`${source?.plugins.length} plugin${source?.plugins.length !== 1 ? 's' : ''}`)
   if (hasCollections) sourceSummaryParts.push(`${source?.collections?.length} collection${source?.collections?.length !== 1 ? 's' : ''}`)
+  if (hasHomeRows) sourceSummaryParts.push(`${source?.homeRows.length} Home row${source?.homeRows.length !== 1 ? 's' : ''}`)
 
   return (
     <div className="grid-bg" style={{ minHeight: '100vh', padding: '0 16px' }}>
@@ -572,11 +665,6 @@ export default function Home() {
                   <Input label="Password" value={sourcePassword} onChange={setSourcePassword}
                     placeholder="••••••••" type="password" disabled={sourceLoading} />
                 </div>
-                {sourceError && (
-                  <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--error)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <XIcon /> {sourceError}
-                  </div>
-                )}
                 <button onClick={handleSourceLogin} disabled={!sourceEmail || !sourcePassword || sourceLoading}
                   style={{
                     width: '100%', padding: '11px', background: 'var(--accent)', border: 'none',
@@ -659,12 +747,25 @@ export default function Home() {
                     )}
 
                     {activeTab === 'collections' && <CollectionsPreview collections={source.collections} />}
+
+                    {activeTab === 'homeRows' && (
+                      <HomeRowsPreview
+                        rows={source.homeRows}
+                        onToggle={updateHomeRow}
+                        onSetAll={setAllHomeRows}
+                      />
+                    )}
                   </div>
                 ) : (
                   <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
                     No data found on this profile
                   </div>
                 )}
+              </div>
+            )}
+            {sourceError && (
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, padding: '10px 14px', marginTop: 16, fontSize: 13, color: 'var(--error)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <XIcon /> {sourceError}
               </div>
             )}
           </div>
